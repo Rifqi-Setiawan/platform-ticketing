@@ -2,6 +2,8 @@
 
 A Go ticket reservation service for a fictional tournament final. Give two buyers one remaining ticket, deliver a payment twice, or pay after the deadline. The review lab shows the resulting stock and ticket IDs from PostgreSQL.
 
+[Try the live ticket office](https://tribunpass.rifqisetiawan.my.id/) · [Read the portfolio case study](https://portfolio.rifqisetiawan.my.id/project/tribunpass-go-ticketing)
+
 [![Ticket office preview](docs/demo-preview.jpg)](docs/demo.mp4)
 
 [Watch the 90-second walkthrough](docs/demo.mp4) · [Engineering case study](docs/case-study.md) · [System design and decisions](docs/design.md) · [OpenAPI contract](docs/openapi.yaml)

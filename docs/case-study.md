@@ -56,4 +56,4 @@ For lock sampling, run the following in one terminal and `VUS_LIST=100 ITERATION
 docker compose exec -T db psql -XqAt -U tribunpass -d tribunpass < bench/stock-locks.sql
 ```
 
-The UI, simulator and synthetic inventory are designed for demonstrations. Public hosting would require deployment-specific capacity planning and access controls. Real settlement, refunds and provider reconciliation are separate product decisions.
+The public ticket office gives each visitor a sandbox with synthetic inventory. Use the review lab to observe a payment replay or a race for the last ticket. Payments are simulated, and each guest session expires after 24 hours. [Try TribunPass](https://tribunpass.rifqisetiawan.my.id/) · [Portfolio case study](https://portfolio.rifqisetiawan.my.id/project/tribunpass-go-ticketing)
