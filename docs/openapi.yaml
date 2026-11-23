@@ -1,0 +1,800 @@
+openapi: 3.1.0
+info:
+  title: TribunPass API
+  version: 1.0.0
+  description: Tournament ticket reservations and repeatable failure scenarios. Mutation bodies are JSON. Error
+    responses carry a request ID for log correlation. Use the same key and body after an ambiguous network result.
+servers:
+- url: /
+  description: Same origin as the demo UI or the Go server.
+tags:
+- name: Sessions
+- name: Reservations
+- name: Payments
+- name: Demo
+- name: Operations
+security:
+- guestSession: []
+paths:
+  /v1/demo-sessions:
+    post:
+      tags:
+      - Sessions
+      operationId: openDemoSession
+      summary: Open or resume a guest session
+      security:
+      - {}
+      - guestSession: []
+      description: Creates a private match with Reguler and VIP sections. A valid cookie resumes its existing session.
+        A new cookie lasts 24 hours and carries HttpOnly, SameSite=Lax, and Secure when configured for HTTPS.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties: {}
+      responses:
+        '200':
+          description: Existing session resumed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '201':
+          description: Session and inventory created.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Set-Cookie:
+              schema:
+                type: string
+              description: Opaque 256-bit tribunpass_session cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/events:
+    get:
+      tags:
+      - Reservations
+      operationId: listEvents
+      summary: List matches and available sections
+      description: Returns the current session's public purchase inventory. The snapshot can change while the buyer
+        is choosing a section.
+      responses:
+        '200':
+          description: Current match inventory.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/holds:
+    post:
+      tags:
+      - Reservations
+      operationId: createHold
+      summary: Hold one ticket for five minutes
+      description: Key scope is one buyer and operation. An exact retry returns the original 201 or SOLD_OUT outcome,
+        even after inventory or hold status changes. Use GET on the hold for current state. After a connection failure
+        repeat the same key.
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          $ref: '#/components/schemas/RequestKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HoldRequest'
+      responses:
+        '201':
+          description: The original snapshot at reservation creation.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+            Location:
+              schema:
+                type: string
+              description: Relative URL of the new hold.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoldCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: SOLD_OUT or IDEMPOTENCY_CONFLICT. A deliberate new purchase uses a fresh key.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/holds/{id}:
+    get:
+      tags:
+      - Reservations
+      operationId: getHold
+      summary: Read current hold and transition history
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      description: Reports stored lifecycle state. A hold awaiting the expiry worker can still read HELD after its
+        deadline. The payment decision checks database time independently.
+      responses:
+        '200':
+          description: Current reservation, optional ticket, and ordered transitions.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Hold'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/demo/payments:
+    post:
+      tags:
+      - Payments
+      operationId: simulatePayment
+      summary: Deliver a simulated payment for an owned hold
+      description: The server reads the stored price and signs a callback over HTTP. Reuse the same eventId to repeat
+        a delivery. Distinct event IDs for one paid hold return its existing ticket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulatePayment'
+      responses:
+        '200':
+          description: Acknowledged callback outcome.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: EVENT_CONFLICT. The event ID was already used for another payment.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/payment-callbacks/simulator:
+    post:
+      tags:
+      - Payments
+      operationId: acceptPaymentCallback
+      summary: Verify and process a provider callback
+      security:
+      - simulatorSignature: []
+      description: The server verifies HMAC-SHA256 over the exact request body before decoding it. An exact replay
+        returns its original receipt. Late or incorrectly priced payments are acknowledged with their recorded outcome.
+        A retry after a 503 must reuse the event ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentEvent'
+      responses:
+        '200':
+          description: Payment event processed or replayed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: EVENT_CONFLICT. The same event ID was sent with a different payment payload.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/demo/scenarios:
+    post:
+      tags:
+      - Demo
+      operationId: runScenario
+      summary: Run an isolated failure scenario
+      description: Each run creates a separate fixture. last-ticket starts two buyers against capacity one. duplicate-payment
+        repeats one signed callback. late-payment starts with a due hold. Steps and final inventory reflect the
+        actual reservation service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioRequest'
+      responses:
+        '200':
+          description: Scenario observations in display order.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRun'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /health/live:
+    get:
+      tags:
+      - Operations
+      operationId: liveness
+      summary: Check the Go process
+      security: []
+      responses:
+        '200':
+          description: The server is serving HTTP.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags:
+      - Operations
+      operationId: readiness
+      summary: Check database readiness
+      security: []
+      responses:
+        '200':
+          description: The database is reachable.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: NOT_READY. Database is unavailable.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /metrics:
+    get:
+      tags:
+      - Operations
+      operationId: getMetrics
+      summary: Read Prometheus-format database and application metrics
+      description: Direct Go listener. Includes per-instance outcome counters, callback replays, expiry backlog
+        and connection-pool statistics. The Next.js proxy exposes the /v1 API only.
+      security: []
+      responses:
+        '200':
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: Metrics collection failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    guestSession:
+      type: apiKey
+      in: cookie
+      name: tribunpass_session
+    simulatorSignature:
+      type: apiKey
+      in: header
+      name: X-TribunPass-Signature
+      description: Use sha256=<lowercase hex HMAC-SHA256 of the raw JSON body> with the simulator signing secret.
+        Keep the secret server-side.
+  headers:
+    RequestID:
+      description: Unique identifier generated for this HTTP request.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    RequestKey:
+      type: string
+      pattern: ^[A-Za-z0-9_.:-]{1,128}$
+      minLength: 1
+      maxLength: 128
+    Session:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+      required:
+      - sessionId
+    Health:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+      required:
+      - status
+    Section:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        capacity:
+          type: integer
+          minimum: 1
+        available:
+          type: integer
+          minimum: 0
+        priceIdr:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whole Indonesian rupiah.
+      required:
+      - id
+      - name
+      - capacity
+      - available
+      - priceIdr
+    Event:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Section'
+      required:
+      - id
+      - name
+      - sections
+    EventList:
+      type: object
+      additionalProperties: false
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+      required:
+      - events
+    HoldRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        sectionId:
+          type: string
+          format: uuid
+      required:
+      - sectionId
+      examples:
+      - sectionId: a13bddea-e893-45e0-bdeb-e1a07e52bde4
+    HoldCreated:
+      type: object
+      additionalProperties: false
+      properties:
+        holdId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: HELD
+        priceIdr:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whole Indonesian rupiah.
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - holdId
+      - status
+      - priceIdr
+      - expiresAt
+    HoldStatus:
+      type: string
+      enum:
+      - HELD
+      - CONFIRMED
+      - EXPIRED
+    Transition:
+      type: object
+      additionalProperties: false
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+          maximum: 2
+        from:
+          $ref: '#/components/schemas/HoldStatus'
+        to:
+          $ref: '#/components/schemas/HoldStatus'
+        cause:
+          type: string
+        at:
+          type: string
+          format: date-time
+      required:
+      - sequence
+      - to
+      - cause
+      - at
+    Hold:
+      type: object
+      additionalProperties: false
+      properties:
+        holdId:
+          type: string
+          format: uuid
+        sectionId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/HoldStatus'
+        priceIdr:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whole Indonesian rupiah.
+        expiresAt:
+          type: string
+          format: date-time
+        ticketId:
+          type: string
+          format: uuid
+        transitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transition'
+      required:
+      - holdId
+      - sectionId
+      - status
+      - priceIdr
+      - expiresAt
+      - transitions
+    SimulatePayment:
+      type: object
+      additionalProperties: false
+      properties:
+        holdId:
+          type: string
+          format: uuid
+        eventId:
+          $ref: '#/components/schemas/RequestKey'
+      required:
+      - holdId
+      - eventId
+      examples:
+      - holdId: d531b5e1-51f3-41d0-abd9-2671cf107067
+        eventId: 77c913f3-3212-4505-87ab-c1be045dea30
+    PaymentEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        eventId:
+          $ref: '#/components/schemas/RequestKey'
+        holdId:
+          type: string
+          format: uuid
+        amountIdr:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whole Indonesian rupiah.
+        type:
+          type: string
+          const: payment.succeeded
+      required:
+      - eventId
+      - holdId
+      - amountIdr
+      - type
+      examples:
+      - eventId: 77c913f3-3212-4505-87ab-c1be045dea30
+        holdId: d531b5e1-51f3-41d0-abd9-2671cf107067
+        amountIdr: 75000
+        type: payment.succeeded
+    PaymentReceipt:
+      type: object
+      additionalProperties: false
+      properties:
+        eventId:
+          $ref: '#/components/schemas/RequestKey'
+        holdId:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum:
+          - CONFIRMED
+          - ALREADY_CONFIRMED
+          - RECORDED_LATE
+          - AMOUNT_MISMATCH
+        ticketId:
+          type: string
+          format: uuid
+      required:
+      - eventId
+      - holdId
+      - outcome
+    ScenarioName:
+      type: string
+      enum:
+      - last-ticket
+      - duplicate-payment
+      - late-payment
+    ScenarioRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        scenario:
+          $ref: '#/components/schemas/ScenarioName'
+      required:
+      - scenario
+      examples:
+      - scenario: last-ticket
+    ScenarioStep:
+      type: object
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+        outcome:
+          type: string
+          enum:
+          - CREATED
+          - SOLD_OUT
+          - CONFIRMED
+          - ALREADY_CONFIRMED
+          - RECORDED_LATE
+          - DEADLINE_PASSED
+          - AMOUNT_MISMATCH
+        holdId:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        eventId:
+          $ref: '#/components/schemas/RequestKey'
+      required:
+      - label
+      - outcome
+    ScenarioRun:
+      type: object
+      additionalProperties: false
+      properties:
+        scenario:
+          $ref: '#/components/schemas/ScenarioName'
+        sectionId:
+          type: string
+          format: uuid
+        capacity:
+          type: integer
+          minimum: 0
+        available:
+          type: integer
+          minimum: 0
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScenarioStep'
+      required:
+      - scenario
+      - sectionId
+      - capacity
+      - available
+      - steps
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+          - code
+          - message
+        requestId:
+          type: string
+          format: uuid
+      required:
+      - error
+      - requestId
+      examples:
+      - error:
+          code: SOLD_OUT
+          message: This section is sold out.
+        requestId: b6decb80-a92d-41c7-8fd2-25d7f944a3fb
+  responses:
+    BadRequest:
+      description: Invalid or unsupported input. See error.code for INVALID_REQUEST, INVALID_EVENT, or UNKNOWN_SCENARIO.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: SESSION_REQUIRED or INVALID_SIGNATURE.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: CROSS_SITE_REQUEST. Browser writes marked cross-site are rejected.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: NOT_FOUND. An inaccessible resource has the same response as a missing resource.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooLarge:
+      description: BODY_TOO_LARGE. JSON requests are limited to 8 KiB.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unsupported:
+      description: UNSUPPORTED_MEDIA_TYPE. Use application/json for a JSON body.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unavailable:
+      description: TEMPORARILY_UNAVAILABLE. The operation may have committed. Repeat the same session, request key,
+        or payment event ID.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+        Retry-After:
+          schema:
+            type: string
+            const: '1'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
