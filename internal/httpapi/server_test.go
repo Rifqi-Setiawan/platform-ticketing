@@ -48,7 +48,7 @@ func (s *stubStore) GetHold(_ context.Context, session, buyer, hold string) (boo
 	if session != "session" || buyer != s.holdOwner || hold != testHoldID {
 		return booking.Hold{}, sql.ErrNoRows
 	}
-	return booking.Hold{HoldID: hold, PriceIDR: 50000}, nil
+	return booking.Hold{HoldID: hold, PriceIDR: 50000, TotalIDR: 50000, Quantity: 1}, nil
 }
 func (s *stubStore) ApplyPayment(_ context.Context, event booking.PaymentEvent, _ string) (booking.PaymentResult, error) {
 	s.seen = event

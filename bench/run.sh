@@ -37,7 +37,7 @@ SQL
     K6_NO_USAGE_REPORT=true k6 run --quiet bench/holds.js
     curl -fsS "$BASE_URL/metrics" > "$prefix-after.prom"
     observed="$(psql_demo -v section="$SECTION_ID" <<'SQL'
-SELECT s.capacity=s.available+count(h.id) FILTER (WHERE h.status IN ('HELD','CONFIRMED')) FROM sections s LEFT JOIN holds h ON h.section_id=s.id WHERE s.id=:'section'::uuid GROUP BY s.id;
+SELECT s.capacity=s.available+COALESCE(sum(h.quantity) FILTER (WHERE h.status IN ('HELD','CONFIRMED')),0) FROM sections s LEFT JOIN holds h ON h.section_id=s.id WHERE s.id=:'section'::uuid GROUP BY s.id;
 SQL
 )"
     test "$observed" = t || { echo "Stock invariant failed" >&2; exit 1; }

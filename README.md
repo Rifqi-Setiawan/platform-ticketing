@@ -1,12 +1,12 @@
 # TribunPass
 
-A Go ticket reservation service for a fictional tournament final. Give two buyers one remaining ticket, deliver a payment twice, or pay after the deadline. The review lab shows the resulting stock and ticket IDs from PostgreSQL.
+A Go and PostgreSQL ticket office for a fictional football final. Choose a stand, reserve up to four tickets, review the order, complete a simulated payment and print individually numbered e-tickets. The organizer dashboard uses the same stock and transaction data as the buyer flow.
 
-[Try the live ticket office](https://tribunpass.rifqisetiawan.my.id/) Â· [Read the portfolio case study](https://portfolio.rifqisetiawan.my.id/project/tribunpass-go-ticketing)
+[Buy demo tickets](https://tribunpass.rifqisetiawan.my.id/) · [Organizer dashboard](https://tribunpass.rifqisetiawan.my.id/admin) · [Review lab](https://tribunpass.rifqisetiawan.my.id/lab) · [Portfolio case study](https://portfolio.rifqisetiawan.my.id/project/tribunpass-go-ticketing)
 
-[![Ticket office preview](docs/demo-preview.jpg)](docs/demo.mp4)
+![Ticket office preview](docs/demo-preview.jpg)
 
-[Watch the 90-second walkthrough](docs/demo.mp4) Â· [Engineering case study](docs/case-study.md) Â· [System design and decisions](docs/design.md) Â· [OpenAPI contract](docs/openapi.yaml)
+[Original single-ticket walkthrough](docs/demo.mp4) · [Engineering case study](docs/case-study.md) · [System design](docs/design.md) · [OpenAPI contract](docs/openapi.yaml)
 
 ## Run the ticket office
 
@@ -16,7 +16,7 @@ From this directory with Docker and the Compose plugin installed:
 docker compose up -d --build --wait
 ```
 
-Open **http://localhost:3000**. Reserve one Reguler or VIP ticket, simulate a payment, then refresh to see the same ticket. Open **Review lab** to run the last-ticket race, callback replay and late-payment scenarios. Each run creates its own inventory. The public-facing demo uses fictional payments. The first build downloads the base images and npm/Go dependencies.
+Open **http://localhost:3000**. Select Reguler or VIP, review the quantity and total, then simulate payment within five minutes. **Tiket saya** shows orders for the current buyer. **Admin** shows per-stand capacity, held inventory, sales, revenue and recent orders; it can resize a stand while preserving all allocated tickets. Each visitor administers their own demo event. Open **Review lab** to run the last-ticket race, callback replay and late-payment scenarios. Each run creates its own inventory. The public-facing demo uses fictional payments. The first build downloads the base images and npm/Go dependencies.
 
 The API listens on **http://localhost:8080**. Open `/health/ready` for database readiness and `/metrics` for pool pressure, expiry backlog and per-process result counters. Compose binds its published ports to loopback. `docker compose down` stops the application and keeps local reservations in the named volume. Guest sessions expire after 24 hours.
 

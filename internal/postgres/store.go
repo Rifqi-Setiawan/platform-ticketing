@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"tribunpass/internal/booking"
 )
@@ -52,7 +53,7 @@ func (s *Store) FindSession(ctx context.Context, tokenHash string) (booking.Sess
 }
 
 func (s *Store) Events(ctx context.Context, sessionID string) ([]booking.Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.name,t.id,t.name,t.capacity,t.available,t.price_idr
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.name,e.starts_at,t.id,t.name,t.capacity,t.available,t.price_idr
         FROM events e JOIN sections t ON t.event_id=e.id
         WHERE e.session_id=$1 AND NOT e.is_fixture ORDER BY e.id,t.price_idr,t.id`, sessionID)
 	if err != nil {
@@ -62,12 +63,13 @@ func (s *Store) Events(ctx context.Context, sessionID string) ([]booking.Event, 
 	events := []booking.Event{}
 	for rows.Next() {
 		var id, name string
+		var startsAt time.Time
 		var tier booking.Section
-		if err := rows.Scan(&id, &name, &tier.ID, &tier.Name, &tier.Capacity, &tier.Available, &tier.PriceIDR); err != nil {
+		if err := rows.Scan(&id, &name, &startsAt, &tier.ID, &tier.Name, &tier.Capacity, &tier.Available, &tier.PriceIDR); err != nil {
 			return nil, err
 		}
 		if len(events) == 0 || events[len(events)-1].ID != id {
-			events = append(events, booking.Event{ID: id, Name: name})
+			events = append(events, booking.Event{ID: id, Name: name, StartsAt: startsAt.UTC()})
 		}
 		event := &events[len(events)-1]
 		event.Sections = append(event.Sections, tier)

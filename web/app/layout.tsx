@@ -2,16 +2,16 @@ import type { Metadata } from 'next'
 import './styles.css'
 
 export const metadata: Metadata = {
-  title: 'TribunPass | Matchday tickets',
+  title: 'TribunPass | Tiket pertandingan',
   description:
-    'Reserve a tournament ticket and inspect how TribunPass handles competing buyers, payment retries and expiry.',
+    'Pilih tribun, pesan tiket pertandingan, dan simpan e-tiket Nusantara Cup di TribunPass.',
 }
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="id">
       <body>{children}</body>
     </html>
   )

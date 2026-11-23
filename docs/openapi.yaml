@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: TribunPass API
-  version: 1.0.0
+  version: 1.1.0
   description: Tournament ticket reservations and repeatable failure scenarios. Mutation bodies are JSON. Error
     responses carry a request ID for log correlation. Use the same key and body after an ambiguous network result.
 servers:
@@ -13,6 +13,7 @@ tags:
 - name: Payments
 - name: Demo
 - name: Operations
+- name: Demo organizer
 security:
 - guestSession: []
 paths:
@@ -95,8 +96,8 @@ paths:
       tags:
       - Reservations
       operationId: createHold
-      summary: Hold one ticket for five minutes
-      description: Key scope is one buyer and operation. An exact retry returns the original 201 or SOLD_OUT outcome,
+      summary: Hold one to four tickets together for five minutes
+      description: Key scope is one buyer and operation. Section, quantity and trimmed display name identify the request. An exact retry returns the original 201 or SOLD_OUT outcome,
         even after inventory or hold status changes. Use GET on the hold for current state. After a connection failure
         repeat the same key.
       parameters:
@@ -179,13 +180,81 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/me/orders:
+    get:
+      operationId: listBuyerOrders
+      tags: [Reservations]
+      summary: List the newest 50 orders belonging to the signed-in sandbox buyer
+      description: Includes past and active main-event holds. Use the hold resource to open the individual tickets.
+      responses:
+        '200':
+          description: Recent purchases ordered by creation time, latest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/OrganizerOrder'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/admin/overview:
+    get:
+      operationId: organizerOverview
+      tags: [Demo organizer]
+      summary: View stock, revenue and the newest 50 orders for your own demo
+      description: Only the primary buyer session may manage its event. Review lab fixtures and other sessions are excluded.
+      responses:
+        '200':
+          description: Consistent snapshot of section inventory and recent purchases.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrganizerOverview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/admin/sections/{id}/capacity:
+    post:
+      operationId: setSectionCapacity
+      tags: [Demo organizer]
+      summary: Set total capacity of a section in your own demo
+      parameters:
+      - {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [capacity]
+              properties:
+                capacity: {type: integer, minimum: 1, maximum: 1000}
+      responses:
+        '200':
+          description: Section after resizing with all sold and held tickets preserved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Section'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: CAPACITY_BELOW_ALLOCATED. Capacity cannot be smaller than the total held and sold.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '415': {$ref: '#/components/responses/Unsupported'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/demo/payments:
     post:
       tags:
       - Payments
       operationId: simulatePayment
       summary: Deliver a simulated payment for an owned hold
-      description: The server reads the stored price and signs a callback over HTTP. Reuse the same eventId to repeat
+      description: The server reads the stored unit price and quantity and signs the total amount over HTTP. Reuse the same eventId to repeat
         a delivery. Distinct event IDs for one paid hold return its existing ticket.
       requestBody:
         required: true
@@ -456,6 +525,7 @@ components:
           format: uuid
         name:
           type: string
+        startsAt: {type: string, format: date-time}
         sections:
           type: array
           items:
@@ -464,6 +534,7 @@ components:
       - id
       - name
       - sections
+      - startsAt
     EventList:
       type: object
       additionalProperties: false
@@ -478,6 +549,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        quantity: {type: integer, minimum: 1, maximum: 4}
+        displayName: {type: string, maxLength: 60}
         sectionId:
           type: string
           format: uuid
@@ -489,12 +562,15 @@ components:
       type: object
       additionalProperties: false
       properties:
+        quantity: {type: integer, minimum: 1, maximum: 4}
+        displayName: {type: string, maxLength: 60}
         holdId:
           type: string
           format: uuid
         status:
           type: string
           const: HELD
+        totalIdr: {type: integer, format: int64, minimum: 0, description: Total amount for all tickets.}
         priceIdr:
           type: integer
           format: int64
@@ -504,6 +580,9 @@ components:
           type: string
           format: date-time
       required:
+      - quantity
+      - displayName
+      - totalIdr
       - holdId
       - status
       - priceIdr
@@ -540,6 +619,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        quantity: {type: integer, minimum: 1, maximum: 4}
+        displayName: {type: string, maxLength: 60}
         holdId:
           type: string
           format: uuid
@@ -548,6 +629,7 @@ components:
           format: uuid
         status:
           $ref: '#/components/schemas/HoldStatus'
+        totalIdr: {type: integer, format: int64, minimum: 0, description: Total amount for all tickets.}
         priceIdr:
           type: integer
           format: int64
@@ -556,6 +638,10 @@ components:
         expiresAt:
           type: string
           format: date-time
+        tickets:
+          type: array
+          description: Issued admission codes, in ordinal order. Empty until confirmed.
+          items: {$ref: '#/components/schemas/Ticket'}
         ticketId:
           type: string
           format: uuid
@@ -564,12 +650,54 @@ components:
           items:
             $ref: '#/components/schemas/Transition'
       required:
+      - quantity
+      - displayName
+      - totalIdr
       - holdId
       - sectionId
       - status
       - priceIdr
       - expiresAt
       - transitions
+      - tickets
+    Ticket:
+      type: object
+      required: [ticketId, ordinal]
+      properties:
+        ticketId: {type: string, format: uuid}
+        ordinal: {type: integer, minimum: 1, maximum: 4}
+    OrganizerSection:
+      type: object
+      required: [id, name, capacity, available, priceIdr, held, sold, revenueIdr]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        capacity: {type: integer}
+        available: {type: integer}
+        priceIdr: {type: integer, format: int64}
+        held: {type: integer}
+        sold: {type: integer}
+        revenueIdr: {type: integer, format: int64}
+    OrganizerOrder:
+      type: object
+      required: [holdId, displayName, sectionName, quantity, totalIdr, status, createdAt, expiresAt]
+      properties:
+        holdId: {type: string, format: uuid}
+        displayName: {type: string}
+        sectionName: {type: string}
+        quantity: {type: integer, minimum: 1, maximum: 4}
+        totalIdr: {type: integer, format: int64}
+        status: {$ref: '#/components/schemas/HoldStatus'}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+    OrganizerOverview:
+      type: object
+      required: [eventId, eventName, sections, recentOrders]
+      properties:
+        eventId: {type: string, format: uuid}
+        eventName: {type: string}
+        sections: {type: array, items: {$ref: '#/components/schemas/OrganizerSection'}}
+        recentOrders: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/OrganizerOrder'}}
     SimulatePayment:
       type: object
       additionalProperties: false

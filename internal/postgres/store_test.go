@@ -99,8 +99,9 @@ func (d database) assertInventory(t *testing.T, sectionID string, wantAvailable,
 	t.Helper()
 	var capacity, available, held, confirmed, tickets int
 	err := d.db.QueryRowContext(d.ctx, `SELECT s.capacity,s.available,
-        count(*) FILTER (WHERE h.status='HELD'),count(*) FILTER (WHERE h.status='CONFIRMED'),count(t.id)
-        FROM sections s LEFT JOIN holds h ON h.section_id=s.id LEFT JOIN tickets t ON t.hold_id=h.id
+        COALESCE(sum(h.quantity) FILTER (WHERE h.status='HELD'),0),COALESCE(sum(h.quantity) FILTER (WHERE h.status='CONFIRMED'),0),
+        (SELECT count(*) FROM tickets t JOIN holds hh ON hh.id=t.hold_id WHERE hh.section_id=s.id)
+        FROM sections s LEFT JOIN holds h ON h.section_id=s.id
         WHERE s.id=$1 GROUP BY s.id`, sectionID).Scan(&capacity, &available, &held, &confirmed, &tickets)
 	if err != nil {
 		t.Fatal(err)

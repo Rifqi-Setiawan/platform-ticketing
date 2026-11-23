@@ -2,7 +2,11 @@ package booking
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type HoldStatus string
@@ -33,6 +37,7 @@ type Session struct{ ID, BuyerID string }
 type Event struct {
 	ID       string    `json:"id"`
 	Name     string    `json:"name"`
+	StartsAt time.Time `json:"startsAt"`
 	Sections []Section `json:"sections"`
 }
 type Section struct {
@@ -42,13 +47,25 @@ type Section struct {
 	Available int    `json:"available"`
 	PriceIDR  int64  `json:"priceIdr"`
 }
-type CreateHoldCommand struct{ SessionID, BuyerID, SectionID, Key, RequestID string }
+type CreateHoldCommand struct {
+	SessionID, BuyerID, SectionID, Key, RequestID string
+	Quantity                                      int
+	DisplayName                                   string
+}
+
+func ValidOrder(quantity int, name string) bool {
+	return quantity >= 1 && quantity <= 4 && utf8.RuneCountInString(name) <= 60 && strings.IndexFunc(name, unicode.IsControl) < 0
+}
+
 type CreateHoldResult struct {
-	Code      string     `json:"-"`
-	HoldID    string     `json:"holdId"`
-	Status    HoldStatus `json:"status"`
-	PriceIDR  int64      `json:"priceIdr"`
-	ExpiresAt time.Time  `json:"expiresAt"`
+	Code        string     `json:"-"`
+	HoldID      string     `json:"holdId"`
+	Status      HoldStatus `json:"status"`
+	PriceIDR    int64      `json:"priceIdr"`
+	Quantity    int        `json:"quantity"`
+	TotalIDR    int64      `json:"totalIdr"`
+	DisplayName string     `json:"displayName"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
 }
 type Transition struct {
 	Sequence int        `json:"sequence"`
@@ -62,10 +79,44 @@ type Hold struct {
 	SectionID   string       `json:"sectionId"`
 	Status      HoldStatus   `json:"status"`
 	PriceIDR    int64        `json:"priceIdr"`
+	Quantity    int          `json:"quantity"`
+	TotalIDR    int64        `json:"totalIdr"`
+	DisplayName string       `json:"displayName"`
+	Tickets     []Ticket     `json:"tickets"`
 	ExpiresAt   time.Time    `json:"expiresAt"`
 	TicketID    string       `json:"ticketId,omitempty"`
 	Transitions []Transition `json:"transitions"`
 }
+type Ticket struct {
+	TicketID string `json:"ticketId"`
+	Ordinal  int    `json:"ordinal"`
+}
+
+type SectionSales struct {
+	Section
+	Held       int   `json:"held"`
+	Sold       int   `json:"sold"`
+	RevenueIDR int64 `json:"revenueIdr"`
+}
+type Order struct {
+	HoldID      string     `json:"holdId"`
+	DisplayName string     `json:"displayName"`
+	SectionName string     `json:"sectionName"`
+	Quantity    int        `json:"quantity"`
+	TotalIDR    int64      `json:"totalIdr"`
+	Status      HoldStatus `json:"status"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+}
+type Overview struct {
+	EventID      string         `json:"eventId"`
+	EventName    string         `json:"eventName"`
+	Sections     []SectionSales `json:"sections"`
+	RecentOrders []Order        `json:"recentOrders"`
+}
+
+var ErrCapacityBelowAllocated = errors.New("capacity below allocated tickets")
+
 type PaymentEvent struct {
 	EventID   string `json:"eventId"`
 	HoldID    string `json:"holdId"`
@@ -90,4 +141,7 @@ type Store interface {
 	ExpireNext(ctx context.Context) (bool, error)
 	CreateFixture(ctx context.Context, session Session, kind string) (Fixture, error)
 	Section(ctx context.Context, sessionID, sectionID string) (Section, error)
+	AdminOverview(ctx context.Context, session Session) (Overview, error)
+	BuyerOrders(ctx context.Context, session Session) ([]Order, error)
+	SetCapacity(ctx context.Context, session Session, sectionID string, capacity int) (Section, error)
 }

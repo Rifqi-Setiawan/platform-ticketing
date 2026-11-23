@@ -1,6 +1,6 @@
 # Selling the last ticket in Go
 
-TribunPass models a tournament ticket office with general-admission inventory for each stand. The buyer can hold one ticket for five minutes. The difficult moment is the boundary between a successful reservation, a lost HTTP response, and a competing buyer. The demo exposes that boundary through live inventory, reservation history and a repeatable payment simulator.
+TribunPass models a tournament ticket office with general-admission inventory for each stand. A buyer can hold up to four tickets for five minutes. The difficult moment is the boundary between a successful reservation, a lost HTTP response, and a competing buyer. The demo exposes that boundary through live inventory, reservation history and a repeatable payment simulator.
 
 [Watch the walkthrough](demo.mp4) · [High- and low-level design](design.md) · [OpenAPI](openapi.yaml)
 
@@ -8,7 +8,7 @@ TribunPass models a tournament ticket office with general-admission inventory fo
 
 Consider one ticket and two buyers. Both screens can legitimately report that one ticket is available. When they click reserve, PostgreSQL evaluates a conditional decrement on the same stock row. One transaction obtains it and commits the hold alongside the idempotency result. When the other obtains the row, the remaining stock is zero. This second buyer receives `409 SOLD_OUT`. If the winner loses their HTTP response, retrying through another API instance returns the original reservation. The buyer can verify its present status separately. [Reservation transaction](../internal/postgres/holds.go)
 
-Payment delivery has two identities. The **event ID** identifies a provider message and makes duplicate delivery replayable. The **hold ID** identifies the purchase and has a unique ticket constraint. Even a second successful message with a different event ID cannot grant another ticket for the same hold. A late payment and the expiry worker both acquire the hold lock before making a decision. The winner of that lock reads the database clock and persists the business outcome, inventory change and transition together. [Payment and expiry transactions](../internal/postgres/payments.go)
+Payment delivery has two identities. The **event ID** identifies a provider message and makes duplicate delivery replayable. The **hold ID** identifies the purchase. Each place has a unique ordinal within its hold. A second successful message with a different event ID returns the existing result without issuing extra credentials. A late payment and the expiry worker both acquire the hold lock before making a decision. The winner of that lock reads the database clock and persists the business outcome, inventory change and transition together. [Payment and expiry transactions](../internal/postgres/payments.go)
 
 ## What was exercised
 
@@ -19,7 +19,7 @@ Payment delivery has two identities. The **event ID** identifies a provider mess
 
 ## Measured on 23 November 2026
 
-The Go API, PostgreSQL 16.16 and k6 2.4.0 ran on the same shared Linux VPS with **4 vCPUs**, Intel Xeon Platinum 8370C, about 55 GiB host memory and ext4 storage. The Compose backend used Go 1.26.11 with 10 pool connections. Each closed-loop k6 virtual user sent 20 unique reservation requests. The success profile started with enough stock for every request. The contention profile started with ten tickets. Session creation and inventory seeding happened before measurement. All six runs finished with zero unexpected responses and a valid database stock invariant. [Machine-readable results](benchmark-results.json) · [Benchmark runner](../bench/run.sh)
+These measurements used the original single-ticket release. The Go API, PostgreSQL 16.16 and k6 2.4.0 ran on the same shared Linux VPS with **4 vCPUs**, Intel Xeon Platinum 8370C, about 55 GiB host memory and ext4 storage. The Compose backend used Go 1.26.11 with 10 pool connections. Each closed-loop k6 virtual user sent 20 unique reservation requests. The success profile started with enough stock for every request. The contention profile started with ten tickets. Session creation and inventory seeding happened before measurement. All six runs finished with zero unexpected responses and a valid database stock invariant. [Machine-readable results](benchmark-results.json) · [Benchmark runner](../bench/run.sh)
 
 | Profile | Concurrent clients | Requests | Created | Sold out | Requests/s | p50 | p95 |
 |---|---:|---:|---:|---:|---:|---:|---:|

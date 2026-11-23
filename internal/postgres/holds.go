@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"tribunpass/internal/booking"
 )
@@ -17,6 +19,13 @@ func recordCreated(ctx context.Context, tx *sql.Tx, holdID, requestID string) er
 
 func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (booking.CreateHoldResult, error) {
 	var result booking.CreateHoldResult
+	if cmd.Quantity == 0 {
+		cmd.Quantity = 1
+	}
+	cmd.DisplayName = strings.TrimSpace(cmd.DisplayName)
+	if !booking.ValidOrder(cmd.Quantity, cmd.DisplayName) {
+		return result, fmt.Errorf("invalid order quantity or display name")
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return result, err
@@ -33,8 +42,8 @@ func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (
 		return result, sql.ErrNoRows
 	}
 
-	claim, err := tx.ExecContext(ctx, `INSERT INTO idempotency_keys(buyer_id,operation,key,section_id)
-        VALUES ($1,'hold',$2,$3) ON CONFLICT DO NOTHING`, cmd.BuyerID, cmd.Key, cmd.SectionID)
+	claim, err := tx.ExecContext(ctx, `INSERT INTO idempotency_keys(buyer_id,operation,key,section_id,quantity,display_name)
+        VALUES ($1,'hold',$2,$3,$4,$5) ON CONFLICT DO NOTHING`, cmd.BuyerID, cmd.Key, cmd.SectionID, cmd.Quantity, cmd.DisplayName)
 	if err != nil {
 		return result, err
 	}
@@ -48,8 +57,8 @@ func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (
 		var sameInput bool
 		var status int
 		var saved []byte
-		err = tx.QueryRowContext(ctx, `SELECT section_id=$3::uuid,http_status,result FROM idempotency_keys
-            WHERE buyer_id=$1 AND operation='hold' AND key=$2`, cmd.BuyerID, cmd.Key, cmd.SectionID).Scan(&sameInput, &status, &saved)
+		err = tx.QueryRowContext(ctx, `SELECT section_id=$3::uuid AND quantity=$4 AND display_name=$5,http_status,result FROM idempotency_keys
+            WHERE buyer_id=$1 AND operation='hold' AND key=$2`, cmd.BuyerID, cmd.Key, cmd.SectionID, cmd.Quantity, cmd.DisplayName).Scan(&sameInput, &status, &saved)
 		if err != nil {
 			return result, err
 		}
@@ -60,14 +69,19 @@ func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (
 			return result, err
 		}
 		result.Code = "CREATED"
+		// Snapshots made by the original single-ticket API predate these JSON fields.
+		if result.Quantity == 0 {
+			result.Quantity = 1
+			result.TotalIDR = result.PriceIDR
+		}
 		if status == 409 {
 			result.Code = "SOLD_OUT"
 		}
 		return result, nil
 	}
 
-	err = tx.QueryRowContext(ctx, `UPDATE sections SET available=available-1
-        WHERE id=$1 AND available>0 RETURNING price_idr`, cmd.SectionID).Scan(&result.PriceIDR)
+	err = tx.QueryRowContext(ctx, `UPDATE sections SET available=available-$2
+        WHERE id=$1 AND available >= $2 RETURNING price_idr`, cmd.SectionID, cmd.Quantity).Scan(&result.PriceIDR)
 	status := 201
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -76,9 +90,11 @@ func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (
 	case err != nil:
 		return result, err
 	default:
-		err = tx.QueryRowContext(ctx, `INSERT INTO holds (buyer_id,section_id,price_idr,status,created_at,expires_at)
-            SELECT $1,$2,$3,'HELD',t,t+interval '5 minutes' FROM (SELECT clock_timestamp() AS t) clock
-            RETURNING id,expires_at`, cmd.BuyerID, cmd.SectionID, result.PriceIDR).Scan(&result.HoldID, &result.ExpiresAt)
+		result.Quantity, result.DisplayName = cmd.Quantity, cmd.DisplayName
+		result.TotalIDR = result.PriceIDR * int64(cmd.Quantity)
+		err = tx.QueryRowContext(ctx, `INSERT INTO holds (buyer_id,section_id,price_idr,quantity,display_name,status,created_at,expires_at)
+            SELECT $1,$2,$3,$4,$5,'HELD',t,t+interval '5 minutes' FROM (SELECT clock_timestamp() AS t) clock
+            RETURNING id,expires_at`, cmd.BuyerID, cmd.SectionID, result.PriceIDR, cmd.Quantity, cmd.DisplayName).Scan(&result.HoldID, &result.ExpiresAt)
 		if err != nil {
 			return result, err
 		}
@@ -104,10 +120,12 @@ func (s *Store) CreateHold(ctx context.Context, cmd booking.CreateHoldCommand) (
 // One SELECT gives the response a single snapshot of status, ticket and history.
 func (s *Store) GetHold(ctx context.Context, sessionID, buyerID, holdID string) (booking.Hold, error) {
 	var hold booking.Hold
-	rows, err := s.db.QueryContext(ctx, `SELECT h.id,h.section_id,h.status,h.price_idr,h.expires_at,COALESCE(t.id::text,''),
+	rows, err := s.db.QueryContext(ctx, `SELECT h.id,h.section_id,h.status,h.price_idr,h.expires_at,h.quantity,h.display_name,
+        COALESCE((SELECT json_agg(json_build_object('ticketId',t.id,'ordinal',t.ordinal) ORDER BY t.ordinal)
+            FROM tickets t WHERE t.hold_id=h.id),'[]'::json),
         ht.sequence,COALESCE(ht.from_status,''),ht.to_status,ht.cause,ht.occurred_at
         FROM holds h JOIN buyers b ON b.id=h.buyer_id
-        JOIN hold_transitions ht ON ht.hold_id=h.id LEFT JOIN tickets t ON t.hold_id=h.id
+        JOIN hold_transitions ht ON ht.hold_id=h.id
         WHERE h.id=$1 AND b.id=$2 AND b.session_id=$3 ORDER BY ht.sequence`, holdID, buyerID, sessionID)
 	if err != nil {
 		return hold, err
@@ -115,11 +133,20 @@ func (s *Store) GetHold(ctx context.Context, sessionID, buyerID, holdID string) 
 	defer rows.Close()
 	for rows.Next() {
 		var tr booking.Transition
-		if err = rows.Scan(&hold.HoldID, &hold.SectionID, &hold.Status, &hold.PriceIDR, &hold.ExpiresAt, &hold.TicketID,
+		var ticketJSON []byte
+		if err = rows.Scan(&hold.HoldID, &hold.SectionID, &hold.Status, &hold.PriceIDR, &hold.ExpiresAt, &hold.Quantity, &hold.DisplayName, &ticketJSON,
 			&tr.Sequence, &tr.From, &tr.To, &tr.Cause, &tr.At); err != nil {
 			return hold, err
 		}
 		tr.At = tr.At.UTC()
+		if hold.Tickets == nil {
+			if err = json.Unmarshal(ticketJSON, &hold.Tickets); err != nil {
+				return hold, err
+			}
+			if len(hold.Tickets) > 0 {
+				hold.TicketID = hold.Tickets[0].TicketID
+			}
+		}
 		hold.Transitions = append(hold.Transitions, tr)
 	}
 	if err = rows.Err(); err != nil {
@@ -129,5 +156,6 @@ func (s *Store) GetHold(ctx context.Context, sessionID, buyerID, holdID string) 
 		return hold, sql.ErrNoRows
 	}
 	hold.ExpiresAt = hold.ExpiresAt.UTC()
+	hold.TotalIDR = hold.PriceIDR * int64(hold.Quantity)
 	return hold, nil
 }

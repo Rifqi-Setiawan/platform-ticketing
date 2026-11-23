@@ -5,11 +5,14 @@ export type Section = {
   available: number
   priceIdr: number
 }
-export type Match = { id: string; name: string; sections: Section[] }
+export type Match = { id: string; name: string; startsAt?: string; sections: Section[] }
 export type HoldSnapshot = {
   holdId: string
   status: 'HELD' | 'CONFIRMED' | 'EXPIRED'
   priceIdr: number
+  quantity?: number
+  totalIdr?: number
+  displayName?: string
   expiresAt: string
 }
 export type Transition = {
@@ -22,6 +25,7 @@ export type Transition = {
 export type Hold = HoldSnapshot & {
   sectionId: string
   ticketId?: string
+  tickets?: { ticketId: string; ordinal: number }[]
   transitions: Transition[]
 }
 export type Payment = {
@@ -55,11 +59,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(
-  path: string,
-  body?: object,
-  key?: string,
-): Promise<T> {
+export async function api<T>(path: string, body?: object, key?: string): Promise<T> {
   const response = await fetch('/v1/' + path, {
     method: body === undefined ? 'GET' : 'POST',
     cache: 'no-store',
@@ -79,24 +79,22 @@ export async function api<T>(
       data?.error?.message || 'The ticket service is unavailable.',
     )
   }
-  if (data === null)
-    throw new Error('The ticket service returned an unreadable response.')
+  if (data === null) throw new Error('The ticket service returned an unreadable response.')
   return data as T
 }
 
 export function describe(error: unknown) {
   if (error instanceof ApiError && error.code === 'SOLD_OUT')
-    return 'That stand just sold out. Choose another stand or refresh availability.'
+    return 'Kuota yang tersisa tidak mencukupi. Silakan kurangi jumlah atau pilih tribun lain.'
   if (error instanceof ApiError && error.status === 401)
-    return 'Your demo session has expired. Reload to start a new one.'
+    return 'Sesi demo berakhir. Muat ulang halaman untuk memulai sesi baru.'
   if (error instanceof ApiError && error.status === 429)
-    return 'Too many requests. Wait a moment before trying again.'
+    return 'Permintaan terlalu sering. Tunggu sebentar, lalu coba lagi.'
   if (error instanceof ApiError && error.status < 500) return error.message
-  return 'The ticket service could not be reached. Check your connection and retry.'
+  return 'Koneksi ke loket terputus. Periksa jaringan lalu coba lagi.'
 }
 
-export const currency = (value: number) =>
-  'Rp ' + new Intl.NumberFormat('id-ID').format(value)
+export const currency = (value: number) => 'Rp ' + new Intl.NumberFormat('id-ID').format(value)
 export const human = (value: string) => value.replaceAll('_', ' ').toLowerCase()
 export const clock = (value: string) =>
   new Date(value).toLocaleTimeString('en-GB', {
@@ -110,7 +108,7 @@ export type Saved = {
   sessionId: string
   holdId?: string
   paymentId?: string
-  pending?: { key: string; sectionId: string }
+  pending?: { key: string; sectionId: string; quantity?: number; displayName?: string }
 }
 export function readSaved(): Saved | null {
   try {
@@ -120,7 +118,11 @@ export function readSaved(): Saved | null {
   }
 }
 export function save(value: Saved) {
-  localStorage.setItem(STORAGE, JSON.stringify(value))
+  try {
+    localStorage.setItem(STORAGE, JSON.stringify(value))
+  } catch {
+    // Active checkout still works in memory when the browser blocks storage.
+  }
 }
 
 let opening: Promise<{ sessionId: string }> | undefined

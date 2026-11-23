@@ -187,8 +187,9 @@ func (c *cluster) inventory(t *testing.T, section string, available, held, confi
 	t.Helper()
 	var cap, remaining, active, paid, tickets int
 	err := c.db.QueryRowContext(c.ctx, `SELECT s.capacity,s.available,
-		count(h.id) FILTER (WHERE h.status='HELD'),count(h.id) FILTER (WHERE h.status='CONFIRMED'),count(t.id)
-		FROM sections s LEFT JOIN holds h ON s.id=h.section_id LEFT JOIN tickets t ON t.hold_id=h.id
+		COALESCE(sum(h.quantity) FILTER (WHERE h.status='HELD'),0),COALESCE(sum(h.quantity) FILTER (WHERE h.status='CONFIRMED'),0),
+		(SELECT count(*) FROM tickets t JOIN holds hh ON hh.id=t.hold_id WHERE hh.section_id=s.id)
+		FROM sections s LEFT JOIN holds h ON s.id=h.section_id
 		WHERE s.id=$1 GROUP BY s.id`, section).Scan(&cap, &remaining, &active, &paid, &tickets)
 	if err != nil {
 		t.Fatal(err)

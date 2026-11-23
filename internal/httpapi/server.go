@@ -16,6 +16,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"tribunpass/internal/booking"
@@ -61,6 +62,9 @@ func New(store booking.Store, cfg Config) http.Handler {
 	mux.HandleFunc("GET /health/ready", s.ready)
 	mux.HandleFunc("POST /v1/demo-sessions", s.createSession)
 	mux.HandleFunc("GET /v1/events", s.withSession(s.events))
+	mux.HandleFunc("GET /v1/me/orders", s.withSession(s.buyerOrders))
+	mux.HandleFunc("GET /v1/admin/overview", s.withSession(s.adminOverview))
+	mux.HandleFunc("POST /v1/admin/sections/{id}/capacity", s.withSession(s.setCapacity))
 	mux.HandleFunc("POST /v1/holds", s.withSession(s.createHold))
 	mux.HandleFunc("GET /v1/holds/{id}", s.withSession(s.getHold))
 	mux.HandleFunc("POST /v1/demo/payments", s.withSession(s.pay))
@@ -274,9 +278,20 @@ func (s *server) events(w http.ResponseWriter, r *http.Request, session booking.
 	writeJSON(w, 200, map[string]any{"events": events})
 }
 
+func (s *server) buyerOrders(w http.ResponseWriter, r *http.Request, session booking.Session) {
+	orders, err := s.store.BuyerOrders(r.Context(), session)
+	if err != nil {
+		s.storeError(w, r, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"orders": orders})
+}
+
 func (s *server) createHold(w http.ResponseWriter, r *http.Request, session booking.Session) {
 	var input struct {
-		SectionID string `json:"sectionId"`
+		SectionID   string `json:"sectionId"`
+		Quantity    *int   `json:"quantity"`
+		DisplayName string `json:"displayName"`
 	}
 	if !jsonBody(w, r, &input) {
 		return
@@ -286,8 +301,18 @@ func (s *server) createHold(w http.ResponseWriter, r *http.Request, session book
 		fail(w, r, 400, "INVALID_REQUEST", "Provide a section UUID and a 1-128 character Idempotency-Key.")
 		return
 	}
+	quantity := 1
+	if input.Quantity != nil {
+		quantity = *input.Quantity
+	}
+	name := strings.TrimSpace(input.DisplayName)
+	if !booking.ValidOrder(quantity, name) {
+		fail(w, r, 400, "INVALID_REQUEST", "Select 1 to 4 tickets and use a display name of at most 60 characters.")
+		return
+	}
 	result, err := s.store.CreateHold(r.Context(), booking.CreateHoldCommand{
 		SessionID: session.ID, BuyerID: session.BuyerID, SectionID: input.SectionID, Key: key, RequestID: requestID(r),
+		Quantity: quantity, DisplayName: name,
 	})
 	if err != nil {
 		s.storeError(w, r, err)
@@ -299,9 +324,9 @@ func (s *server) createHold(w http.ResponseWriter, r *http.Request, session book
 		w.Header().Set("Location", "/v1/holds/"+result.HoldID)
 		writeJSON(w, 201, result)
 	case "SOLD_OUT":
-		fail(w, r, 409, result.Code, "This section is sold out.")
+		fail(w, r, 409, result.Code, "There are not enough tickets remaining in this section.")
 	case "IDEMPOTENCY_CONFLICT":
-		fail(w, r, 409, result.Code, "This request key was already used for a different section.")
+		fail(w, r, 409, result.Code, "This request key was already used for a different order.")
 	default:
 		s.storeError(w, r, fmt.Errorf("unexpected hold result %q", result.Code))
 	}

@@ -16,6 +16,7 @@ type lockedHold struct {
 	sectionID string
 	status    booking.HoldStatus
 	priceIDR  int64
+	quantity  int
 	expiresAt time.Time
 }
 
@@ -29,9 +30,12 @@ func finalize(ctx context.Context, tx *sql.Tx, h lockedHold, status booking.Hold
 	var ticketID string
 	switch status {
 	case booking.Confirmed:
-		err = tx.QueryRowContext(ctx, `INSERT INTO tickets(hold_id,issued_at) VALUES ($1,$2) RETURNING id`, h.id, at).Scan(&ticketID)
+		err = tx.QueryRowContext(ctx, `WITH issued AS (
+            INSERT INTO tickets(hold_id,issued_at,ordinal)
+            SELECT $1,$2,n FROM generate_series(1,$3::integer) AS n RETURNING id,ordinal
+        ) SELECT id FROM issued WHERE ordinal=1`, h.id, at, h.quantity).Scan(&ticketID)
 	case booking.Expired:
-		_, err = tx.ExecContext(ctx, "UPDATE sections SET available=available+1 WHERE id=$1", h.sectionID)
+		_, err = tx.ExecContext(ctx, "UPDATE sections SET available=available+$2 WHERE id=$1", h.sectionID, h.quantity)
 	default:
 		return "", fmt.Errorf("invalid terminal status %s", status)
 	}
@@ -80,8 +84,8 @@ func (s *Store) ApplyPayment(ctx context.Context, event booking.PaymentEvent, re
 	}
 
 	var h lockedHold
-	err = tx.QueryRowContext(ctx, `SELECT id,section_id,status,price_idr,expires_at FROM holds
-        WHERE id=$1 FOR UPDATE`, event.HoldID).Scan(&h.id, &h.sectionID, &h.status, &h.priceIDR, &h.expiresAt)
+	err = tx.QueryRowContext(ctx, `SELECT id,section_id,status,price_idr,quantity,expires_at FROM holds
+        WHERE id=$1 FOR UPDATE`, event.HoldID).Scan(&h.id, &h.sectionID, &h.status, &h.priceIDR, &h.quantity, &h.expiresAt)
 	if err != nil {
 		return r, err
 	}
@@ -91,10 +95,10 @@ func (s *Store) ApplyPayment(ctx context.Context, event booking.PaymentEvent, re
 	}
 	r.Outcome = booking.DecidePayment(h.status, h.expiresAt, now)
 	switch {
-	case event.AmountIDR != h.priceIDR:
+	case event.AmountIDR != h.priceIDR*int64(h.quantity):
 		r.Outcome = "AMOUNT_MISMATCH"
 	case r.Outcome == "ALREADY_CONFIRMED":
-		err = tx.QueryRowContext(ctx, "SELECT id FROM tickets WHERE hold_id=$1", h.id).Scan(&r.TicketID)
+		err = tx.QueryRowContext(ctx, "SELECT id FROM tickets WHERE hold_id=$1 AND ordinal=1", h.id).Scan(&r.TicketID)
 	case h.status == booking.Held:
 		target := booking.Confirmed
 		if r.Outcome == "RECORDED_LATE" {
@@ -123,9 +127,9 @@ func (s *Store) ExpireNext(ctx context.Context) (bool, error) {
 	}
 	defer tx.Rollback()
 	var h lockedHold
-	err = tx.QueryRowContext(ctx, `SELECT id,section_id,status,price_idr,expires_at FROM holds
+	err = tx.QueryRowContext(ctx, `SELECT id,section_id,status,price_idr,quantity,expires_at FROM holds
         WHERE status='HELD' AND expires_at<=statement_timestamp()
-        ORDER BY expires_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&h.id, &h.sectionID, &h.status, &h.priceIDR, &h.expiresAt)
+        ORDER BY expires_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&h.id, &h.sectionID, &h.status, &h.priceIDR, &h.quantity, &h.expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

@@ -44,7 +44,7 @@ func (s *server) pay(w http.ResponseWriter, r *http.Request, session booking.Ses
 var errEventConflict = errors.New("payment event conflicts with a prior event")
 
 func (s *server) deliver(ctx context.Context, hold booking.Hold, eventID string) (booking.PaymentResult, error) {
-	event := simulator.Event{EventID: eventID, HoldID: hold.HoldID, AmountIDR: hold.PriceIDR, Type: "payment.succeeded"}
+	event := simulator.Event{EventID: eventID, HoldID: hold.HoldID, AmountIDR: hold.TotalIDR, Type: "payment.succeeded"}
 	status, body, err := s.simulator.Deliver(ctx, event)
 	if err != nil {
 		return booking.PaymentResult{}, err

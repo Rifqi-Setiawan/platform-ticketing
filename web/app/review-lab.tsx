@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { api, describe, human } from './api'
+import { api, describe, openSession } from './api'
 import type { Scenario, ScenarioResult } from './api'
 
 const scenarios: {
@@ -12,25 +12,34 @@ const scenarios: {
 }[] = [
   {
     id: 'last-ticket',
-    title: 'The last ticket',
-    detail: 'Two buyers reserve the same remaining ticket at the same time.',
+    title: 'Tiket terakhir',
+    detail: 'Dua pembeli memesan satu tiket tersisa secara bersamaan.',
     check:
-      'One buyer receives the hold. The other receives a sold-out response.',
+      'Satu pembeli mendapat reservasi. Pembeli lain mendapat respons stok habis.',
   },
   {
     id: 'duplicate-payment',
-    title: 'Payment replay',
-    detail: 'The same successful payment callback is delivered twice.',
-    check: 'Both deliveries resolve to the same ticket ID.',
+    title: 'Pembayaran berulang',
+    detail: 'Callback pembayaran yang sama dikirim dua kali.',
+    check: 'Kedua pengiriman menghasilkan ID tiket yang sama.',
   },
   {
     id: 'late-payment',
-    title: 'Past the deadline',
-    detail: 'A payment arrives for a reservation whose deadline has passed.',
+    title: 'Lewat tenggat',
+    detail: 'Pembayaran tiba setelah batas waktu reservasi.',
     check:
-      'The payment is recorded as late and the ticket returns to inventory.',
+      'Pembayaran tercatat terlambat dan kuota kembali tersedia.',
   },
 ]
+
+const stepLabels: Record<string, string> = {
+  'Buyer A requested the final ticket': 'Pembeli A memesan tiket terakhir',
+  'Buyer B requested the final ticket': 'Pembeli B memesan tiket terakhir',
+  'Reserve the ticket': 'Buat reservasi',
+  'Start with a hold past its deadline': 'Siapkan reservasi yang melewati tenggat',
+  'Deliver the payment callback': 'Kirim callback pembayaran',
+  'Redeliver the same event': 'Kirim ulang event yang sama',
+}
 
 export function ReviewLab() {
   const [scenario, setScenario] = useState<Scenario>('last-ticket')
@@ -52,6 +61,7 @@ export function ReviewLab() {
     setError('')
     setResult(null)
     try {
+      await openSession()
       setResult(await api<ScenarioResult>('demo/scenarios', { scenario }))
     } catch (err) {
       setError(describe(err))
@@ -63,18 +73,16 @@ export function ReviewLab() {
   return (
     <>
       <section className="lab-head">
-        <div className="section-kicker">Engineering sandbox</div>
         <h1>
           Review lab<span>.</span>
         </h1>
         <p>
-          Run a booking scenario against the Go API. Each run starts with its
-          own ticket inventory.
+          Uji perebutan tiket, pengiriman ulang pembayaran, dan batas waktu reservasi. Setiap skenario memakai kuota tersendiri.
         </p>
       </section>
       <div className="lab-grid">
         <section className="card lab-picker">
-          <h2>Choose a scenario</h2>
+          <h2>Pilih skenario</h2>
           <div className="scenario-list">
             {scenarios.map((s) => (
               <button
@@ -100,7 +108,7 @@ export function ReviewLab() {
             ))}
           </div>
           <button className="primary" onClick={run} disabled={busy}>
-            {busy ? 'Running scenario…' : result ? 'Run again' : 'Run scenario'}{' '}
+            {busy ? 'Menjalankan…' : result ? 'Jalankan lagi' : 'Jalankan skenario'}{' '}
             <span aria-hidden="true">↗</span>
           </button>
           {error && (
@@ -111,19 +119,19 @@ export function ReviewLab() {
         </section>
         <section className="card results" aria-live="polite" ref={log}>
           <div className="result-head">
-            <div className="section-kicker">Execution log</div>
+            <div className="section-kicker">Riwayat eksekusi</div>
             <span className={'run-state' + (result ? ' done' : '')}>
-              {busy ? 'Running' : result ? 'Completed' : 'Ready'}
+              {busy ? 'Berjalan' : result ? 'Selesai' : 'Siap'}
             </span>
           </div>
-          <h2>{result ? current.title : 'Scenario results'}</h2>
+          <h2>{result ? current.title : 'Hasil skenario'}</h2>
           {!result ? (
             <div className="expected">
               <span className="terminal-icon" aria-hidden="true">
                 ›_
               </span>
               <strong>
-                {busy ? 'Waiting for API results…' : 'Expected result'}
+                {busy ? 'Menunggu hasil API…' : 'Hasil yang diharapkan'}
               </strong>
               <p>{current.check}</p>
             </div>
@@ -131,18 +139,18 @@ export function ReviewLab() {
             <>
               <div className="result-stat">
                 <strong>{result.available}</strong>
-                <span>of {result.capacity} tickets available after run</span>
+                <span>dari {result.capacity} tiket tersedia setelah pengujian</span>
               </div>
               <ol className="timeline">
                 {result.steps.map((step, i) => (
                   <li key={i}>
                     <span className="timeline-dot" />
                     <div>
-                      <strong>{step.label}</strong>
-                      <small>{human(step.outcome)}</small>
-                      {step.holdId && <code>Hold {step.holdId}</code>}
+                      <strong>{stepLabels[step.label] || step.label}</strong>
+                      <small>{step.outcome}</small>
+                      {step.holdId && <code>Reservasi {step.holdId}</code>}
                       {step.eventId && <code>Event {step.eventId}</code>}
-                      {step.ticketId && <code>Ticket {step.ticketId}</code>}
+                      {step.ticketId && <code>Tiket {step.ticketId}</code>}
                     </div>
                   </li>
                 ))}
